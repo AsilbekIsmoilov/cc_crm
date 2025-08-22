@@ -1,0 +1,10 @@
+{% extends "admin/change_list.html" %}
+{% load i18n %}
+{% block object-tools-items %}
+  {{ block.super }}
+  <li>
+    <a class="addlink" href="{% url 'admin:crm_api_user_bulk_create_operators' %}">
+      {% trans "Create operators (CSV)" %}
+    </a>
+  </li>
+{% endblock %}
