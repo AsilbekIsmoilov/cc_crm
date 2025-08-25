@@ -9,12 +9,11 @@ from urllib.parse import quote_plus
 from crm_api.models import UploadJob, Actives
 
 BATCH = 1000
-
-# Используем безопасный upsert без дублей в БД
-USE_DJANGO_ORM_UPSERT = True
+USE_DJANGO_ORM_UPSERT = True  # CHANGED: безопасный upsert без дублей в БД
 
 TARGET_TABLE = Actives._meta.db_table
 
+# CHANGED: полный перечень колонок (без fixed_at)
 COLUMNS = [
     "msisdn",
     "departments",
@@ -29,24 +28,33 @@ COLUMNS = [
     "branches",
     "status",
     "phone",
+    "status_call",      # NEW
+    "call_result",      # NEW
+    "abonent_answer",   # NEW
 ]
 
 UNIQ_FIELDS = {"msisdn", "account", "phone"}
+NUMERIC_INT_FIELDS = {"days_in_status", "subscription_fee"}
+NUMERIC_DEC_FIELDS = {"balance"}
 
+# CHANGED: алиасы под ваши заголовки из Excel
 COLUMN_ALIASES = {
-    "MSISDN": "msisdn",
     "DEPARTMENTS": "departments",
+    "MSISDN": "msisdn",
+    "Статус": "status",
+    "CLIENT": "client",
+    "PHONE": "phone",
+    "BRANCHES": "branches",
     "Дата с которой Статус": "status_from",
     "[Дней в статусе]": "days_in_status",
     "Дата Списания АП": "write_offs_date",
-    "CLIENT": "client",
     "RATE_PLAN": "rate_plan",
     "Баланс": "balance",
     "Абон плата": "subscription_fee",
     "ACCOUNT": "account",
-    "BRANCHES": "branches",
-    "Статус": "status",
-    "PHONE": "phone",
+    "Статус звонка": "status_call",
+    "Результат обзвона": "call_result",
+    "Ответ абонента": "abonent_answer",
 }
 
 UPSERT_SQL = f"""
@@ -64,13 +72,12 @@ ON DUPLICATE KEY UPDATE
   account=VALUES(account),
   branches=VALUES(branches),
   status=VALUES(status),
-  phone=VALUES(phone)
+  phone=VALUES(phone),
+  status_call=VALUES(status_call),
+  call_result=VALUES(call_result),
+  abonent_answer=VALUES(abonent_answer)
 """
 
-NUMERIC_INT_FIELDS = {"days_in_status", "subscription_fee"}
-NUMERIC_DEC_FIELDS = {"balance"}
-
-# ---------- НОРМАЛИЗАЦИЯ СТАТУСА ----------
 def _normalize_status(value) -> str:
     """Любые 'suspend*' -> 'suspend 1 month'; любые 'active/актив*' -> 'active'."""
     if value is None:
@@ -78,18 +85,13 @@ def _normalize_status(value) -> str:
     s = str(value).strip().lower()
     if not s:
         return ""
-    # CHANGED: всё, что содержит 'susp' / 'suspend' / 'приостан' -> 'suspend 1 month'
     if "susp" in s or "suspend" in s or "приостан" in s:
         return "suspend 1 month"
-    # CHANGED: любые 'active', 'activ', 'актив', 'включ' -> 'active'
     if "activ" in s or "active" in s or "актив" in s or "включ" in s:
         return "active"
-    # иначе оставляем как есть (в нижнем регистре)
     return s
-# -----------------------------------------
 
 def _coerce(val, field):
-    """Числа; даты -> 'YYYY-MM-DD'; пустые для UNIQ -> None; статус -> нормализуем; остальное -> str/''."""
     if pd.isna(val) or (isinstance(val, str) and not val.strip()):
         if field in UNIQ_FIELDS:
             return None
@@ -98,6 +100,7 @@ def _coerce(val, field):
         if field in NUMERIC_DEC_FIELDS:
             return 0
         return ""
+
     if field in NUMERIC_INT_FIELDS:
         try:
             return int(str(val).replace(" ", "").replace(",", ".").split(".")[0])
@@ -109,33 +112,32 @@ def _coerce(val, field):
             return float(s)
         except Exception:
             return 0
+
+    if field == "status":
+        return _normalize_status(val)
+
     if isinstance(val, str):
         v = val.strip()
-        if field == "status":                # CHANGED
-            return _normalize_status(v)      # CHANGED
         return v if v else (None if field in UNIQ_FIELDS else "")
     if isinstance(val, (pd.Timestamp, dt, date)):
-        if field == "status":                # CHANGED
-            return _normalize_status(val)    # CHANGED
         return str(val)[:10]
-    return _normalize_status(val) if field == "status" else str(val)  # CHANGED
+
+    return str(val)
 
 def _rename_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df.columns = [str(c).strip() for c in df.columns]
     if not COLUMN_ALIASES:
         return df
     ren = {src: dst for src, dst in COLUMN_ALIASES.items() if src in df.columns}
-    if ren:
-        df = df.rename(columns=ren)
-    return df
+    return df.rename(columns=ren) if ren else df
 
-# TCP engine (используется только если USE_DJANGO_ORM_UPSERT=False)
 def _make_engine():
     default = settings.DATABASES["default"]
     user = default["USER"]
     pwd = default["PASSWORD"]
     name = default["NAME"]
     host = default.get("HOST") or "127.0.0.1"
-    if host == "localhost":  # Ubuntu: гарантируем TCP
+    if host == "localhost":
         host = "127.0.0.1"
     port = int(default.get("PORT") or 3306)
     dsn = (
@@ -158,10 +160,7 @@ def _choose_lookup(row: dict) -> tuple[str | None, str | None]:
 
 def _safe_update_fields(obj: Actives, defaults: dict, key_field: str) -> list[str]:
     """
-    Обновляем поля безопасно:
-    - key_field не трогаем;
-    - другие уникальные поля апдейтим только если у obj пусто или значение свободно в БД;
-    - обычные поля (включая status) апдейтим всегда.
+    Обновляем: key не трогаем; другие уникальные — только если пусто/свободно; остальные — всегда.
     """
     changed = []
     for field, val in defaults.items():
@@ -171,10 +170,9 @@ def _safe_update_fields(obj: Actives, defaults: dict, key_field: str) -> list[st
             current = getattr(obj, field)
             new_has = (val is not None and str(val).strip() != "")
             cur_empty = (current is None or str(current).strip() == "")
-            if new_has and cur_empty:
-                if not Actives.objects.filter(**{field: val}).exclude(pk=obj.pk).exists():
-                    setattr(obj, field, val)
-                    changed.append(field)
+            if new_has and cur_empty and not Actives.objects.filter(**{field: val}).exclude(pk=obj.pk).exists():
+                setattr(obj, field, val)
+                changed.append(field)
             continue
         if getattr(obj, field) != val:
             setattr(obj, field, val)
@@ -192,7 +190,7 @@ def _orm_upsert_rows(rows: list[dict]) -> tuple[int, int, str]:
             continue
         defaults = {k: r.get(k) for k in COLUMNS if k != key_field}
         try:
-            obj, created = Actives.objects.update_or_create(
+            Actives.objects.update_or_create(
                 **{key_field: key_value},
                 defaults=defaults,
             )
@@ -234,12 +232,14 @@ def run_import(job_id: int):
         )
         df = _rename_columns(df)
 
+        # создаём недостающие колонки под COLUMNS
         missing = [c for c in COLUMNS if c not in df.columns]
-        if missing:
-            for m in missing:
-                df[m] = None
+        for m in missing:
+            df[m] = None
 
         df = df[COLUMNS].copy()
+
+        # приведение значений
         for c in COLUMNS:
             df[c] = df[c].map(lambda v: _coerce(v, c))
 

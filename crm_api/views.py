@@ -281,25 +281,29 @@ def export_all_suspends(request):
     ws.title = "Suspends"
 
     ws.append([
-        "ID", "MSISDN", "Статус", "Дата создания",
-        "Клиент", "Номер абонента", "Отделы",
+        "DEPARTMENTS", "MSISDN", "Статус","CLIENT", "PHONE", "BRANCHES","Дата с которой Статус","[Дней в статусе]","Дата Списания АП","RATE_PLAN","Баланс","Абон плата","ACCOUNT",
         "Статус звонка", "Результат обзвона", "Ответ абонента",
         "Дата обзвона"
     ])
 
-    # NOTE: no other logic changed; only datetime handling is centralized
-    for obj in Suspends.objects.all():
-        created_at_str = _fmt_local(obj.created_at)      # CHANGED: safe formatting
-        fixed_at_str   = _fmt_local(obj.fixed_at)        # CHANGED: safe formatting
+    for obj in Actives.objects.all():
+        created_at_str = _fmt_local(obj.created_at)
+        fixed_at_str   = _fmt_local(obj.fixed_at)
 
         ws.append([
-            obj.id,
+            obj.departments,
             obj.msisdn,
             obj.status,
-            created_at_str,
             obj.client,
             obj.phone,
             obj.branches,
+            obj.status_from,
+            obj.days_in_status,
+            obj.write_offs_date,
+            obj.rate_plan,
+            obj.balance,
+            obj.subscription_fee,
+            obj.account,
             obj.status_call,
             obj.call_result,
             obj.abonent_answer,
@@ -320,8 +324,7 @@ def export_all_actives(request):
     ws.title = "Actives"
 
     ws.append([
-        "ID", "MSISDN", "Статус", "Дата создания",
-        "Клиент", "Номер абонента", "Отделы",
+        "DEPARTMENTS", "MSISDN", "Статус","CLIENT", "PHONE", "BRANCHES","Дата с которой Статус","[Дней в статусе]","Дата Списания АП","RATE_PLAN","Баланс","Абон плата","ACCOUNT",
         "Статус звонка", "Результат обзвона", "Ответ абонента",
         "Дата обзвона"
     ])
@@ -331,13 +334,19 @@ def export_all_actives(request):
         fixed_at_str   = _fmt_local(obj.fixed_at)
 
         ws.append([
-            obj.id,
+            obj.departments,
             obj.msisdn,
             obj.status,
-            created_at_str,
             obj.client,
             obj.phone,
             obj.branches,
+            obj.status_from,
+            obj.days_in_status,
+            obj.write_offs_date,
+            obj.rate_plan,
+            obj.balance,
+            obj.subscription_fee,
+            obj.account,
             obj.status_call,
             obj.call_result,
             obj.abonent_answer,

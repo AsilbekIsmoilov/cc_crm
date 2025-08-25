@@ -24,7 +24,7 @@ from .models import (
     RecheckRun,
     UploadJob,
 )
-from .services.excel_importer import run_import
+from .services.excel_importer import *
 from crm_api.services.users import bulk_create_operators, build_csv_from_results
 
 
