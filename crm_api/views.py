@@ -1,4 +1,6 @@
 import io
+import threading
+
 from django.contrib.admin.views.decorators import staff_member_required
 from django.conf import settings
 from django.utils import timezone
@@ -8,7 +10,8 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.permissions import DjangoModelPermissions, IsAuthenticated, AllowAny
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.permissions import DjangoModelPermissions, IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 import csv
@@ -16,21 +19,14 @@ from rest_framework_simplejwt.tokens import RefreshToken, UntypedToken
 from rest_framework_simplejwt.views import TokenVerifyView
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.backends import TokenBackend
-from .services import import_excel, filter_sbms, recheck_suspends
-from .models import Actives, Suspends, SBMSAccount, GoogleAccount, User, ExcelUpload
-from .serializers import (
-    ActivesSerializer,
-    ActivesFixationWriteSerializer,
-    SBMSAccountSerializer,
-    GoogleAccountSerializer,
-    ExcelUploadSerializer,
-    OperatorSerializer,
-    MeSerializer,
-)
+from .services import *
+from .models import *
+from .serializers import *
 import openpyxl
 from django.http import HttpResponse
 from django.utils import timezone
 
+from .services.excel_importer import run_import
 
 ORDERABLE = {
     "id", "created_at", "updated_at", "msisdn", "client", "rate_plan",
@@ -262,21 +258,58 @@ class MyTokenVerifyView(TokenVerifyView):
         return Response({"valid": True, "payload": payload, "user": user_info}, status=status.HTTP_200_OK)
 
 
+def _fmt_local(dt, fmt="%Y-%m-%d %H:%M:%S") -> str:
+    if not dt:
+        return ""
+    try:
+        # If dt is naïve, attach default timezone
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt, timezone.get_default_timezone())
+        # Convert to localtime and format
+        return timezone.localtime(dt).strftime(fmt)
+    except Exception:
+        # Fallback: best-effort formatting without tz ops
+        try:
+            return dt.strftime(fmt)
+        except Exception:
+            return ""
+
+
 def export_all_suspends(request):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Suspends"
 
-    ws.append(["ID", "MSISDN", "Статус", "Дата создания","Клиент","Номер абонента","Отделы","Статус звонка","Результат обзвона","Ответ абонента","Дата обзвона"])
+    ws.append([
+        "ID", "MSISDN", "Статус", "Дата создания",
+        "Клиент", "Номер абонента", "Отделы",
+        "Статус звонка", "Результат обзвона", "Ответ абонента",
+        "Дата обзвона"
+    ])
 
+    # NOTE: no other logic changed; only datetime handling is centralized
     for obj in Suspends.objects.all():
-        created_at = obj.created_at
-        if timezone.is_naive(created_at):
-            created_at = timezone.make_aware(created_at, timezone.get_default_timezone())
-        ws.append([obj.id, obj.msisdn, obj.status, timezone.localtime(created_at).strftime("%Y-%m-%d %H:%M:%S"),obj.client,obj.phone,obj.branches,obj.status_call,obj.call_result,obj.abonent_answer,obj.fixed_at])
+        created_at_str = _fmt_local(obj.created_at)      # CHANGED: safe formatting
+        fixed_at_str   = _fmt_local(obj.fixed_at)        # CHANGED: safe formatting
 
-    response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    response["Content-Disposition"] = f'attachment; filename="all_suspends.xlsx"'
+        ws.append([
+            obj.id,
+            obj.msisdn,
+            obj.status,
+            created_at_str,
+            obj.client,
+            obj.phone,
+            obj.branches,
+            obj.status_call,
+            obj.call_result,
+            obj.abonent_answer,
+            fixed_at_str
+        ])
+
+    response = HttpResponse(
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    response["Content-Disposition"] = 'attachment; filename="all_suspends.xlsx"'
     wb.save(response)
     return response
 
@@ -286,16 +319,35 @@ def export_all_actives(request):
     ws = wb.active
     ws.title = "Actives"
 
-    ws.append(["ID", "MSISDN", "Статус", "Дата создания","Клиент","Номер абонента","Отделы","Статус звонка","Результат обзвона","Ответ абонента","Дата обзвона"])
+    ws.append([
+        "ID", "MSISDN", "Статус", "Дата создания",
+        "Клиент", "Номер абонента", "Отделы",
+        "Статус звонка", "Результат обзвона", "Ответ абонента",
+        "Дата обзвона"
+    ])
 
     for obj in Actives.objects.all():
-        created_at = obj.created_at
-        if timezone.is_naive(created_at):
-            created_at = timezone.make_aware(created_at, timezone.get_default_timezone())
-        ws.append([obj.id, obj.msisdn, obj.status, timezone.localtime(created_at).strftime("%Y-%m-%d %H:%M:%S"),obj.client,obj.phone,obj.branches,obj.status_call,obj.call_result,obj.abonent_answer,obj.fixed_at])
+        created_at_str = _fmt_local(obj.created_at)
+        fixed_at_str   = _fmt_local(obj.fixed_at)
 
-    response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    response["Content-Disposition"] = f'attachment; filename="all_actives.xlsx"'
+        ws.append([
+            obj.id,
+            obj.msisdn,
+            obj.status,
+            created_at_str,
+            obj.client,
+            obj.phone,
+            obj.branches,
+            obj.status_call,
+            obj.call_result,
+            obj.abonent_answer,
+            fixed_at_str
+        ])
+
+    response = HttpResponse(
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    response["Content-Disposition"] = 'attachment; filename="all_actives.xlsx"'
     wb.save(response)
     return response
 
@@ -316,35 +368,12 @@ def _capture_run(func):
     return log_text, result
 
 
-def run_export_excel(request):
-    log_text, result = _capture_run(import_excel.run)
-    return HttpResponse(
-        f"<pre>{log_text}\n\n✅ Export Excel завершён: {result}</pre>",
-        content_type="text/html"
-    )
-
-
-def run_filter_sbms(request):
-    log_text, result = _capture_run(filter_sbms.run)
-    return HttpResponse(
-        f"<pre>{log_text}\n\n✅ Filter SBMS завершён: {result}</pre>",
-        content_type="text/html"
-    )
-
-
-def run_recheck_suspends(request):
-    log_text, result = _capture_run(recheck_suspends.run)
-    return HttpResponse(
-        f"<pre>{log_text}\n\n✅ Recheck Suspends завершён: {result}</pre>",
-        content_type="text/html"
-    )
-
-
-
 @staff_member_required
 def export_suspends_phones_csv(request):
-    qs = Suspends.objects.values_list("phone", flat=True) \
-        .exclude(phone__isnull=True).exclude(phone__exact="")
+    qs = (Suspends.objects
+          .values_list("phone", flat=True)
+          .exclude(phone__isnull=True)
+          .exclude(phone__exact=""))
 
     if request.GET.get("distinct"):
         qs = qs.distinct()
@@ -365,3 +394,37 @@ def export_suspends_phones_csv(request):
             writer.writerow([p])
 
     return resp
+
+
+class ImportUploadView(APIView):
+    parser_classes = (MultiPartParser, FormParser)
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, *args, **kwargs):
+        f = request.FILES.get("file")
+        if not f:
+            return Response({"detail": "Приложите файл в поле 'file'."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        job = UploadJob.objects.create(
+            created_by=request.user if request.user.is_authenticated else None,
+            excel_file=f,
+            status="pending",
+        )
+        t = threading.Thread(target=run_import, args=(job.id,), daemon=True)
+        t.start()
+
+        return Response({"job_id": job.id}, status=status.HTTP_201_CREATED)
+
+
+class ImportStatusView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request, job_id: int, *args, **kwargs):
+        try:
+            job = UploadJob.objects.get(id=job_id)
+        except UploadJob.DoesNotExist:
+            return Response({"detail": "Job not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        data = UploadJobSerializer(job).data
+        return Response(data, status=status.HTTP_200_OK)

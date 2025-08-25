@@ -12,4 +12,15 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 
 
-time to'g'irlash kere
+timezone to mysql 
+
+
+
+
+updates :
+1) export_excel.py logikasini o'zgartirish kere 
+balance, tarif compare qilish kere 
+ko'rsatilgan summa
+
+
+

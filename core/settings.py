@@ -60,13 +60,15 @@ WSGI_APPLICATION = 'core.wsgi.application'
 
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'crm_db',
-        'USER':'root',
-        'PASSWORD':'password123',
-        'HOST':'localhost',
-        'PORT':"3306"
+    "default": {
+        "ENGINE": "django.db.backends.mysql",
+        "NAME": "crm_db",
+        "USER": "root",
+        "PASSWORD": "password123",
+        "HOST": "127.0.0.1",
+        "PORT": "3306",
+        "OPTIONS": {"charset": "utf8mb4"},
+        "CONN_MAX_AGE": 60,
     }
 }
 
@@ -99,12 +101,7 @@ TIME_ZONE = 'Asia/Tashkent'
 
 USE_I18N = True
 
-USE_TZ = True
-
-# USE_TZ = True
-# sudo apt-get update
-# sudo apt-get install tzdata -y
-# mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root -p mysql
+USE_TZ = False
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
@@ -153,8 +150,11 @@ SIMPLE_JWT = {
 }
 
 
+
 BASE_DIR = Path(__file__).resolve().parent.parent
-RUNLOGS_DIR = os.path.join(BASE_DIR, "runlogs")
+
+RUNLOGS_DIR = BASE_DIR / "runlogs"
+RUNLOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 LOGGING = {
     "version": 1,
@@ -176,7 +176,7 @@ LOGGING = {
         },
         "file": {
             "class": "logging.handlers.RotatingFileHandler",
-            "filename": os.path.join(RUNLOGS_DIR, "crm.log"),
+            "filename": str(RUNLOGS_DIR / "crm.log"),
             "maxBytes": 10 * 1024 * 1024,
             "backupCount": 5,
             "encoding": "utf-8",
@@ -190,7 +190,11 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
-        "django": {"handlers": ["console"], "level": "WARNING", "propagate": True},
+        "django": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": True,
+        },
     },
 }
 

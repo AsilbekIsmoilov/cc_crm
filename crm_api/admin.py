@@ -1,5 +1,7 @@
 from datetime import datetime
 from io import StringIO
+import threading
+
 from django import forms
 from django.contrib import admin, messages
 from django.contrib.auth import get_user_model
@@ -9,73 +11,21 @@ from django.http import HttpResponse
 from django.shortcuts import render
 from django.urls import path
 from django.utils import timezone
-from openpyxl import Workbook
-from openpyxl.utils import get_column_letter
-from .models import *
+from django.utils.html import format_html
+
+
+from .models import (
+    Actives,
+    Suspends,
+    SBMSAccount,
+    GoogleAccount,
+    ExcelUpload,
+    SbmsAudit,
+    RecheckRun,
+    UploadJob,
+)
+from .services.excel_importer import run_import
 from crm_api.services.users import bulk_create_operators, build_csv_from_results
-
-def _current_changelist_queryset(modeladmin, request):
-    ChangeList = modeladmin.get_changelist(request)
-    cl = ChangeList(
-        request, modeladmin.model, modeladmin.list_display, modeladmin.list_display_links,
-        modeladmin.list_filter, modeladmin.date_hierarchy, modeladmin.search_fields,
-        modeladmin.list_select_related, modeladmin.list_per_page, modeladmin.list_max_show_all,
-        modeladmin.list_editable, modeladmin,modeladmin.sortable_by,modeladmin.search_help_text,
-    )
-    return cl.get_queryset(request)
-
-def _export_status_calls_xlsx(qs):
-    allowed = {choice for choice, _ in STATUS_CALL_CHOICES}
-    qs = qs.filter(status_call__in=allowed).exclude(status_call__isnull=True).exclude(status_call="")
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "STATUS_CALL_CHOICES"
-
-    columns = [
-        ("MSISDN", "msisdn"),
-        ("Клиент", "client"),
-        ("Статус", "status"),
-        ("Филиал", "branches"),
-        ("Тариф", "rate_plan"),
-        ("Абонплата", "subscription_fee"),
-        ("Баланс", "balance"),
-        ("Статус звонка", "status_call"),
-        ("Результат звонка", "call_result"),
-        ("Ответ абонента", "abonent_answer"),
-        ("Технология", "tech"),
-        ("Обновлён", "updated_at"),
-        ("Кто звонил", "fixed_by"),
-        ("Примечание", "note"),
-    ]
-
-    ws.append([c[0] for c in columns])
-
-    for obj in qs.iterator():
-        row = []
-        for _, attr in columns:
-            value = getattr(obj, attr, "")
-            if attr == "fixed_by":
-                value = obj.who_called
-            if isinstance(value, datetime):
-                value = timezone.localtime(value).strftime("%Y-%m-%d %H:%M:%S")
-            row.append("" if value is None else value)
-        ws.append(row)
-
-    for idx, (header, _) in enumerate(columns, start=1):
-        max_len = len(header)
-        for cell_val in ws.iter_cols(min_col=idx, max_col=idx, min_row=2, values_only=True):
-            for v in cell_val:
-                if v is None:
-                    continue
-                max_len = max(max_len, len(str(v)))
-        ws.column_dimensions[get_column_letter(idx)].width = min(max_len + 2, 60)
-
-    resp = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    now = timezone.now().strftime("%Y-%m-%d_%H-%M-%S")
-    resp['Content-Disposition'] = f'attachment; filename="status_call_report_{now}.xlsx"'
-    wb.save(resp)
-    return resp
 
 
 BASE_LIST_DISPLAY = (
@@ -86,13 +36,26 @@ BASE_LIST_DISPLAY = (
 )
 
 BASE_FIELDSETS = (
-    ("Идентификация", {"fields": ("msisdn", "phone", "client", "account")}),
-    ("Организационное", {"fields": ("departments", "branches")}),
-    ("Тариф/баланс", {"fields": ("rate_plan", "subscription_fee", "balance")}),
-    ("Статус абонента", {"fields": ("status", "status_from", "days_in_status", "write_offs_date")}),
-    ("Фиксация", {"fields": ("status_call", "call_result", "abonent_answer", "note", "tech")}),
-    ("Служебные", {"fields": ("created_at", "updated_at")}),
+    ("Идентификация", {
+        "fields": ("msisdn", "phone", "client", "account"),
+    }),
+    ("Организационное", {
+        "fields": ("departments", "branches"),
+    }),
+    ("Тариф/баланс", {
+        "fields": ("rate_plan", "subscription_fee", "balance"),
+    }),
+    ("Статус абонента", {
+        "fields": ("status", "status_from", "days_in_status", "write_offs_date"),
+    }),
+    ("Фиксация", {
+        "fields": ("status_call", "call_result", "abonent_answer", "note", "tech"),
+    }),
+    ("Служебные", {
+        "fields": ("created_at", "updated_at"),
+    }),
 )
+
 
 @admin.register(Actives)
 class ActivesAdmin(admin.ModelAdmin):
@@ -115,55 +78,10 @@ class ActivesAdmin(admin.ModelAdmin):
     save_on_top = True
     empty_value_display = "—"
 
-    change_list_template = "admin/crm_api/actives/change_list.html"
-
-    def get_urls(self):
-        urls = super().get_urls()
-        my = [
-            path(
-                "export_status_call/",
-                self.admin_site.admin_view(self.export_status_call_view),
-                name="crm_api_actives_export_status_call",
-            ),
-        ]
-        return my + urls
-
-    def export_status_call_view(self, request):
-        if not self.has_view_permission(request):
-            raise PermissionDenied
-        qs = _current_changelist_queryset(self, request)
-        return _export_status_calls_xlsx(qs)
-
-    def save_model(self, request, obj, form, change):
-        fixation_fields = {"status_call", "call_result", "abonent_answer", "note", "tech"}
-        changed = set(form.changed_data or [])
-        if change and changed.intersection(fixation_fields):
-            obj.fixed_by = request.user
-            obj.fixed_at = timezone.now()
-        super().save_model(request, obj, form, change)
-
 
 @admin.register(Suspends)
 class SuspendsAdmin(ActivesAdmin):
-    change_list_template = "admin/crm_api/suspends/change_list.html"
-
-    def get_urls(self):
-        urls = super().get_urls()
-        my = [
-            path(
-                "export_status_call/",
-                self.admin_site.admin_view(self.export_status_call_view),
-                name="crm_api_suspends_export_status_call",
-            ),
-        ]
-        return my + urls
-
-    def export_status_call_view(self, request):
-        if not self.has_view_permission(request):
-            raise PermissionDenied
-        qs = _current_changelist_queryset(self, request)
-        return _export_status_calls_xlsx(qs)
-
+    pass
 
 
 class BulkOperatorsForm(forms.Form):
@@ -178,7 +96,6 @@ User = get_user_model()
 
 @admin.register(User)
 class UserAdmin(DjangoUserAdmin):
-    # ссылка в тулбаре списка пользователей
     change_list_template = "admin/crm_api/user/change_list.html"
 
     def get_urls(self):
@@ -193,10 +110,6 @@ class UserAdmin(DjangoUserAdmin):
         return my + urls
 
     def bulk_create_operators_view(self, request):
-        """
-        GET — форма параметров.
-        POST — создаём пользователей и отдаём CSV на скачивание.
-        """
         initial = {"count": 50, "prefix": "operator", "start": 0, "reset_existing": False}
         form = BulkOperatorsForm(request.POST or None, initial=initial)
 
@@ -226,8 +139,6 @@ class UserAdmin(DjangoUserAdmin):
         return render(request, "admin/crm_api/user/bulk_create_operators.html", context)
 
 
-
-
 @admin.register(SBMSAccount)
 class SBMSAccountAdmin(admin.ModelAdmin):
     list_display = ("label", "username", "is_active", "max_google_accounts", "google_accounts_count")
@@ -247,3 +158,77 @@ admin.site.register(SbmsAudit)
 admin.site.register(RecheckRun)
 
 
+@admin.register(UploadJob)
+class UploadJobAdmin(admin.ModelAdmin):
+
+    list_display = (
+        "id",
+        "status",
+        "progress",
+        "succeeded_rows",
+        "failed_rows",
+        "total_rows",
+        "excel_file_link",
+        "created_by",
+        "created_at",
+    )
+    list_filter = (
+        "status",
+        ("created_at", admin.DateFieldListFilter),
+        "created_by",
+    )
+    search_fields = ("id", "excel_file")
+    readonly_fields = (
+        "status",
+        "total_rows",
+        "processed_rows",
+        "succeeded_rows",
+        "failed_rows",
+        "last_error",
+        "created_by",
+        "created_at",
+        "excel_file",
+        "target_table",
+        "progress",
+        "duration",
+    )
+    ordering = ("-id",)
+    actions = ("restart_import",)
+    save_on_top = True
+
+    def has_add_permission(self, request):
+        return False
+
+    def progress(self, obj: UploadJob):
+        if obj.total_rows and obj.processed_rows is not None:
+            p = int(round((obj.processed_rows / max(1, obj.total_rows)) * 100))
+            return f"{p}%"
+        return "—"
+    progress.short_description = "Прогресс"
+
+    def excel_file_link(self, obj: UploadJob):
+        if obj.excel_file:
+            return format_html('<a href="{}" target="_blank">скачать</a>', obj.excel_file.url)
+        return "—"
+    excel_file_link.short_description = "Файл"
+
+    def duration(self, obj: UploadJob):
+        return "—"
+    duration.short_description = "Длительность (оценка)"
+
+    def restart_import(self, request, queryset):
+        restarted = 0
+        skipped = 0
+        for job in queryset:
+            if job.status in ("pending", "failed"):
+                UploadJob.objects.filter(id=job.id).update(status="pending", processed_rows=0, succeeded_rows=0, failed_rows=0, last_error="")
+                t = threading.Thread(target=run_import, args=(job.id,), daemon=True)
+                t.start()
+                restarted += 1
+            else:
+                skipped += 1
+        if restarted:
+            self.message_user(request, f"Перезапущено: {restarted}", level=messages.SUCCESS)
+        if skipped:
+            self.message_user(request, f"Пропущено (уже running/done): {skipped}", level=messages.WARNING)
+    restart_import.short_description = "Перезапустить импорт (pending/failed)"

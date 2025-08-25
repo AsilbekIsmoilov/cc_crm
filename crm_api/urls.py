@@ -23,7 +23,7 @@ urlpatterns = [
     path("", include(router.urls)),
     path("export/all_suspends/", export_all_suspends, name="export_all_suspends"),
     path("export/all_actives/", export_all_actives, name="export_all_actives"),
-    path("run-export-excel/", run_export_excel, name="run_export_excel"),
-    path("run-recheck-suspends/", run_recheck_suspends, name="run_recheck_suspends"),
     path("export/suspends/phones.csv", export_suspends_phones_csv,name="export_suspends_phones_csv"),
+    path("imports/upload/", ImportUploadView.as_view(), name="imports-upload"),
+    path("imports/status/<int:job_id>/", ImportStatusView.as_view(), name="imports-status"),
 ]

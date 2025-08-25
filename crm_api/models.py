@@ -13,7 +13,7 @@ class User(AbstractUser):
         (ROLE_ADMIN, "Administrator"),
     ]
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default=ROLE_OPERATOR, db_index=True)
-    fio = models.CharField(max_length=300,null=True,blank=True,unique=True)
+    fio = models.CharField(max_length=300,null=True,blank=True)
 
     class Meta:
         verbose_name = "User"
@@ -61,7 +61,7 @@ ABONENT_ANSWER_CHOICES = [
 TECH_CHOICES = [("pon", "pon"), ("vdsl", "vdsl"), ("adsl", "adsl"), ("ethernet", "ethernet")]
 
 class Actives(models.Model):
-    msisdn = models.CharField(max_length=250, null=True, blank=True,unique=True)
+    msisdn = models.CharField(max_length=250, null=True, blank=True)
     departments = models.CharField(max_length=300, null=True, blank=True)
     status_from = models.CharField(max_length=100, null=True, blank=True)
     days_in_status = models.PositiveIntegerField(default=0)
@@ -70,10 +70,10 @@ class Actives(models.Model):
     rate_plan = models.CharField(max_length=200, null=True, blank=True)
     balance = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     subscription_fee = models.IntegerField(default=0)
-    account = models.CharField(max_length=32, null=True, blank=True,unique=True)
+    account = models.CharField(max_length=32, null=True, blank=True)
     branches = models.CharField(max_length=300, null=True, blank=True)
     status = models.CharField(max_length=150, null=True, blank=True)
-    phone = models.CharField(max_length=15, null=True, blank=True, unique=True)
+    phone = models.CharField(max_length=15, null=True, blank=True)
 
     status_call = models.CharField(max_length=20, choices=STATUS_CALL_CHOICES, null=True, blank=True)
     call_result = models.CharField(max_length=32, choices=CALL_RESULT_CHOICES, null=True, blank=True)
@@ -130,8 +130,6 @@ class Suspends(Actives):
         verbose_name = "Suspend"
         verbose_name_plural = "Suspends"
 
-
-
 class SbmsAudit(models.Model):
     abonent = models.ForeignKey(Actives, on_delete=models.CASCADE, related_name="sbms_audit")
     msisdn = models.CharField(max_length=250)
@@ -155,10 +153,9 @@ class SbmsAudit(models.Model):
         flag = "OK" if self.ok else "ERR"
         return f"[{flag}] {self.msisdn} {self.old_status} → {self.new_status}"
 
-
 class SBMSAccount(models.Model):
-    label = models.CharField(max_length=100, unique=True)
-    username = models.CharField(max_length=150, unique=True)
+    label = models.CharField(max_length=100)
+    username = models.CharField(max_length=150)
     password = models.CharField(max_length=200)
     is_active = models.BooleanField(default=True)
     max_google_accounts = models.PositiveSmallIntegerField(default=5, help_text="Ожидаемое число привязанных Google-аккаунтов")
@@ -175,12 +172,11 @@ class SBMSAccount(models.Model):
     def google_accounts_count(self) -> int:
         return self.google_accounts.filter(is_active=True).count()
 
-
 class GoogleAccount(models.Model):
     sbms_account = models.ForeignKey(SBMSAccount, on_delete=models.PROTECT, related_name="google_accounts")
-    label = models.CharField(max_length=100, unique=True)
+    label = models.CharField(max_length=100)
     google_email = models.CharField(max_length=255, blank=True, default="")
-    user_data_dir = models.CharField(max_length=500, unique=True, help_text="Путь к папке профиля Chrome")
+    user_data_dir = models.CharField(max_length=500, help_text="Путь к папке профиля Chrome")
     profile_directory = models.CharField(max_length=100, default="Default", help_text="Имя профиля внутри user-data-dir",null=True,blank=True)
     chrome_binary = models.CharField(max_length=500, blank=True, default="", help_text="Путь к chrome, если нестандартный")
     is_active = models.BooleanField(default=True)
@@ -193,65 +189,14 @@ class GoogleAccount(models.Model):
     def __str__(self):
         return f"{self.label} ({self.google_email or 'no-google'})"
 
-
 class ExcelUpload(models.Model):
-    NEW, PROCESSING, PROCESSED, FAILED = "new", "processing", "processed", "failed"
-    STATUS_CHOICES = [(NEW, "new"), (PROCESSING, "processing"), (PROCESSED, "processed"), (FAILED, "failed")]
-
     file = models.FileField(upload_to="uploads/%Y/%m/%d")
     original_name = models.CharField(max_length=255)
-    uploaded_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="excel_uploads"
-    )
     uploaded_at = models.DateTimeField(auto_now_add=True)
-    processed_at = models.DateTimeField(null=True, blank=True)
-    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=NEW, db_index=True)
-    rows_found = models.PositiveIntegerField(default=0)
-    rows_saved = models.PositiveIntegerField(default=0)
-    log = models.TextField(blank=True, default="")
-    log_file = models.FileField(upload_to="runlogs/%Y/%m/%d", blank=True, null=True)
-    batch_tag = models.CharField(max_length=100, blank=True, default="")
-
-    class Meta:
-        ordering = ("-uploaded_at",)
-        indexes = [
-            models.Index(fields=["uploaded_at"]),
-            models.Index(fields=["status"]),
-            models.Index(fields=["batch_tag"]),
-        ]
-
-
-    def mark_processing(self, log_text: str = ""):
-        self.status = self.PROCESSING
-        if log_text:
-            self.log = (self.log or "") + f"\n{log_text}"
-        self.save(update_fields=["status", "log"])
-
-    def mark_failed(self, found: int = None, log_text: str = ""):
-        if found is not None:
-            self.rows_found = found
-        self.status = self.FAILED
-        if log_text:
-            self.log = (self.log or "") + f"\n{log_text}"
-        self.processed_at = timezone.now()
-        self.save(update_fields=["rows_found", "status", "processed_at", "log"])
-
-    def mark_processed(self, saved: int, found: int, ok: bool, log_text: str = ""):
-        self.rows_saved = saved
-        self.rows_found = found
-        self.status = self.PROCESSED if ok else self.FAILED
-        self.processed_at = timezone.now()
-        if log_text:
-            self.log = (self.log or "") + f"\n{log_text}"
-        self.save(update_fields=["rows_saved", "rows_found", "status", "processed_at", "log"])
-
-    def __str__(self):
-        return self.original_name or self.file.name
-
 
 
 class RecheckRun(models.Model):
-    run_id = models.CharField(max_length=64, unique=True)
+    run_id = models.CharField(max_length=64)
     started_at = models.DateTimeField()
     finished_at = models.DateTimeField(null=True, blank=True)
     checked = models.IntegerField(default=0)
@@ -262,3 +207,29 @@ class RecheckRun(models.Model):
     log_path = models.CharField(max_length=512, blank=True, default="")
     activated_path = models.CharField(max_length=512, blank=True, default="")
     log_file = models.FileField(upload_to="runlogs/%Y/%m/%d", blank=True, null=True)
+
+
+class UploadJob(models.Model):
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("running", "Running"),
+        ("done", "Done"),
+        ("failed", "Failed"),
+    ]
+
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    excel_file = models.FileField(upload_to="imports/%Y/%m/%d/")
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="pending")
+
+    total_rows = models.IntegerField(default=0)
+    processed_rows = models.IntegerField(default=0)
+    succeeded_rows = models.IntegerField(default=0)
+    failed_rows = models.IntegerField(default=0)
+
+    last_error = models.TextField(blank=True, default="")
+    target_table = models.CharField(max_length=128, default="actives")  # по умолчанию
+
+    def __str__(self):
+        return f"UploadJob#{self.id} {self.status}"

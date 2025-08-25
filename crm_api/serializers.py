@@ -98,3 +98,12 @@ class MeSerializer(serializers.ModelSerializer):
     def get_display(self, obj: User) -> str:
         full = (getattr(obj, "fio", None) or obj.get_full_name() or "").strip()
         return full or obj.username
+
+
+class UploadJobSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UploadJob
+        fields = [
+            "id", "status", "total_rows", "processed_rows",
+            "succeeded_rows", "failed_rows", "last_error", "created_at",
+        ]
