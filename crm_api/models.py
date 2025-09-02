@@ -192,6 +192,59 @@ class Fixeds(models.Model):
         return f"{self.msisdn or '-'} — {self.client or '-'} (fixed)"
 
 
+def move_suspends_with_status_call_to_fixeds(
+    chunk_size: int = 2000,
+    order_by: str = "pk",
+    delete_after_copy: bool = True,
+    ignore_duplicates: bool = False,
+    dry_run: bool = False,
+) -> int:
+    qs = Suspends.objects.exclude(status_call__isnull=True).exclude(status_call="").order_by(order_by)
+
+    fields_to_copy = [
+        "msisdn", "departments", "status_from", "days_in_status", "write_offs_date",
+        "client", "rate_plan", "balance", "subscription_fee", "account", "branches",
+        "status", "phone", "status_call", "call_result", "abonent_answer", "note",
+        "tech", "fixed_by", "fixed_at",'created_at',"updated_at"
+    ]
+
+    moved = 0
+    to_create = []
+    ids_to_delete = []
+    for obj in qs.only(*fields_to_copy).iterator(chunk_size=chunk_size):
+        data = {f: getattr(obj, f) for f in fields_to_copy}
+        to_create.append(Fixeds(**data))
+        ids_to_delete.append(obj.pk)
+
+        if len(to_create) >= chunk_size:
+            if not dry_run:
+                with transaction.atomic():
+                    Fixeds.objects.bulk_create(
+                        to_create,
+                        batch_size=chunk_size,
+                        ignore_conflicts=ignore_duplicates,
+                    )
+                    if delete_after_copy:
+                        Actives.objects.filter(pk__in=ids_to_delete).delete()
+            moved += len(to_create)
+
+            to_create.clear()
+            ids_to_delete.clear()
+
+    if to_create:
+        if not dry_run:
+            with transaction.atomic():
+                Fixeds.objects.bulk_create(
+                    to_create,
+                    batch_size=chunk_size,
+                    ignore_conflicts=ignore_duplicates,
+                )
+                if delete_after_copy:
+                    Actives.objects.filter(pk__in=ids_to_delete).delete()
+        moved += len(to_create)
+
+    return moved
+
     @property
     def who_called(self) -> str:
         if not self.fixed_by:

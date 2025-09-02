@@ -21,4 +21,6 @@ urlpatterns = [
     path("export/fixeds/", export_all_fixeds, name="export_all_fixeds"),
     path("export/fixeds/daily/", export_fixeds_daily, name="export_fixeds_daily"),
     path("export/fixeds/monthly/", export_fixeds_monthly, name="export_fixeds_monthly"),
+    path("maintenance/move-suspends/", MoveSuspendsToFixedsAPIView.as_view(), name="maintenance-move-suspends"),
+
 ]

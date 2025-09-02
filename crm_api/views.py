@@ -633,3 +633,20 @@ def export_fixeds_monthly(request):
     ws = wb.active
     _write_fixeds_sheet(ws, qs)
     return _xlsx_response(wb, f"fixeds_month_{y:04d}-{m:02d}.xlsx")
+
+
+class MoveSuspendsToFixedsAPIView(APIView):
+    permission_classes = [IsAdminUser]
+    def post(self, request, *args, **kwargs):
+        from .models import move_suspends_with_status_call_to_fixeds
+        with transaction.atomic():
+            result = move_suspends_with_status_call_to_fixeds()
+        payload = {"detail": "Move job finished"}
+        if isinstance(result, dict):
+            payload.update(result)
+        elif isinstance(result, (list, tuple)):
+            payload["result"] = list(result)
+        elif isinstance(result, int):
+            payload["moved"] = result
+
+        return Response(payload, status=status.HTTP_200_OK)
