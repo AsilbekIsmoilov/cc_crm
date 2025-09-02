@@ -14,16 +14,7 @@ from django.utils import timezone
 from django.utils.html import format_html
 
 
-from .models import (
-    Actives,
-    Suspends,
-    SBMSAccount,
-    GoogleAccount,
-    ExcelUpload,
-    SbmsAudit,
-    RecheckRun,
-    UploadJob,
-)
+from .models import *
 from .services.excel_importer import *
 from crm_api.services.users import bulk_create_operators, build_csv_from_results
 
@@ -138,24 +129,7 @@ class UserAdmin(DjangoUserAdmin):
         }
         return render(request, "admin/crm_api/user/bulk_create_operators.html", context)
 
-
-@admin.register(SBMSAccount)
-class SBMSAccountAdmin(admin.ModelAdmin):
-    list_display = ("label", "username", "is_active", "max_google_accounts", "google_accounts_count")
-    list_filter = ("is_active",)
-    search_fields = ("label", "username")
-
-
-@admin.register(GoogleAccount)
-class GoogleAccountAdmin(admin.ModelAdmin):
-    list_display = ("label", "sbms_account", "google_email", "is_active")
-    list_filter = ("is_active", "sbms_account")
-    search_fields = ("label", "google_email", "user_data_dir")
-
-
 admin.site.register(ExcelUpload)
-admin.site.register(SbmsAudit)
-admin.site.register(RecheckRun)
 
 
 @admin.register(UploadJob)
@@ -232,3 +206,19 @@ class UploadJobAdmin(admin.ModelAdmin):
         if skipped:
             self.message_user(request, f"Пропущено (уже running/done): {skipped}", level=messages.WARNING)
     restart_import.short_description = "Перезапустить импорт (pending/failed)"
+
+
+
+@admin.register(Fixeds)
+class FixedsAdmin(admin.ModelAdmin):
+    list_display = (
+        "msisdn", "client", "status", "status_call",
+        "call_result", "abonent_answer", "fixed_at", "created_at", "updated_at", "moved_at",
+    )
+    search_fields = ("msisdn", "client", "phone")
+    list_filter = ("status_call", "call_result", "abonent_answer", "tech")
+    readonly_fields = ("created_at", "updated_at", "moved_at")
+    ordering = ("-moved_at",)
+
+
+

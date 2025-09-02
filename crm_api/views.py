@@ -1,12 +1,13 @@
 import io
 import threading
 
+
 from django.contrib.admin.views.decorators import staff_member_required
 from django.conf import settings
 from django.utils import timezone
 from django.db.models import Q
 import sys
-from rest_framework import viewsets, permissions, status
+from rest_framework import viewsets, permissions, filters, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.pagination import PageNumberPagination
@@ -25,6 +26,7 @@ from .serializers import *
 import openpyxl
 from django.http import HttpResponse
 from django.utils import timezone
+from django_filters.rest_framework import DjangoFilterBackend
 
 from .services.excel_importer import run_import
 
@@ -91,7 +93,6 @@ def _apply_filters(request, qs):
     return qs
 
 
-# -------------------- ViewSets --------------------
 
 class ActivesViewSet(viewsets.ModelViewSet):
     queryset = Actives.objects.all().order_by("-created_at")
@@ -129,7 +130,7 @@ class ActivesViewSet(viewsets.ModelViewSet):
 
 class SuspendsViewSet(viewsets.ModelViewSet):
     queryset = Suspends.objects.all().order_by("-created_at")
-    serializer_class = ActivesSerializer  # если у Suspends свой сериалайзер — поменяй здесь
+    serializer_class = ActivesSerializer
     permission_classes = [permissions.IsAuthenticated, DjangoModelPermissions]
     pagination_class = StandardResultsSetPagination
 
@@ -150,42 +151,46 @@ class SuspendsViewSet(viewsets.ModelViewSet):
 
         ser = ActivesFixationWriteSerializer(abonent, data=request.data, partial=True)
         ser.is_valid(raise_exception=True)
-        ser.save()
 
-        abonent.fixed_by = request.user
-        abonent.fixed_at = timezone.now()
-        abonent.save(update_fields=["fixed_by", "fixed_at", "updated_at"])
-        return Response(ActivesSerializer(abonent).data, status=status.HTTP_200_OK)
+        with transaction.atomic():
+            for f, v in ser.validated_data.items():
+                setattr(abonent, f, v)
+            abonent.fixed_by = request.user
+            abonent.fixed_at = timezone.now()
+            abonent.save()
 
+            fixed = Fixeds.objects.create(
+                msisdn=abonent.msisdn,
+                departments=abonent.departments,
+                status_from=abonent.status_from,
+                days_in_status=abonent.days_in_status,
+                write_offs_date=abonent.write_offs_date,
+                client=abonent.client,
+                rate_plan=abonent.rate_plan,
+                balance=abonent.balance,
+                subscription_fee=abonent.subscription_fee,
+                account=abonent.account,
+                branches=abonent.branches,
+                status=abonent.status,
+                phone=abonent.phone,
+                status_call=abonent.status_call,
+                call_result=abonent.call_result,
+                abonent_answer=abonent.abonent_answer,
+                note=abonent.note,
+                tech=abonent.tech,
+                fixed_by=abonent.fixed_by,
+                fixed_at=abonent.fixed_at,
+                created_at=abonent.created_at,
+                updated_at=abonent.updated_at,
+            )
 
-class FixationsViewSet(viewsets.ReadOnlyModelViewSet):
-    serializer_class = ActivesSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    pagination_class = StandardResultsSetPagination
+            abonent.delete()
 
-    def get_queryset(self):
-        qs = Actives.objects.filter(fixed_by__isnull=False).order_by("-fixed_at")
-        qs = _apply_filters(self.request, qs)
-        operator_id = self.request.query_params.get("operator")
-        if operator_id:
-            qs = qs.filter(fixed_by_id=operator_id)
-        return qs
-
-
-class SBMSAccountViewSet(viewsets.ModelViewSet):
-    queryset = SBMSAccount.objects.filter(is_active=True).order_by("label")
-    serializer_class = SBMSAccountSerializer
-    permission_classes = [permissions.IsAuthenticated, DjangoModelPermissions]
-
-
-class GoogleAccountViewSet(viewsets.ModelViewSet):
-    queryset = GoogleAccount.objects.filter(is_active=True).select_related("sbms_account").order_by("label")
-    serializer_class = GoogleAccountSerializer
-    permission_classes = [permissions.IsAuthenticated, DjangoModelPermissions]
+        return Response(FixedsSerializer(fixed).data, status=status.HTTP_201_CREATED)
 
 
 class ExcelUploadViewSet(viewsets.ModelViewSet):
-    queryset = ExcelUpload.objects.select_related("uploaded_by").order_by("-uploaded_at")
+    queryset = ExcelUpload.objects.order_by("-uploaded_at")
     serializer_class = ExcelUploadSerializer
     permission_classes = [permissions.IsAuthenticated, DjangoModelPermissions]
     pagination_class = StandardResultsSetPagination
@@ -198,7 +203,6 @@ class OperatorsViewSet(viewsets.ReadOnlyModelViewSet):
     pagination_class = None
 
 
-# -------------------- Auth helpers --------------------
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
@@ -257,7 +261,6 @@ class MyTokenVerifyView(TokenVerifyView):
 
         return Response({"valid": True, "payload": payload, "user": user_info}, status=status.HTTP_200_OK)
 
-
 def _fmt_local(dt, fmt="%Y-%m-%d %H:%M:%S") -> str:
     if not dt:
         return ""
@@ -274,7 +277,6 @@ def _fmt_local(dt, fmt="%Y-%m-%d %H:%M:%S") -> str:
         except Exception:
             return ""
 
-
 def export_all_suspends(request):
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -283,10 +285,10 @@ def export_all_suspends(request):
     ws.append([
         "DEPARTMENTS", "MSISDN", "Статус","CLIENT", "PHONE", "BRANCHES","Дата с которой Статус","[Дней в статусе]","Дата Списания АП","RATE_PLAN","Баланс","Абон плата","ACCOUNT",
         "Статус звонка", "Результат обзвона", "Ответ абонента",
-        "Дата обзвона"
+        "Дата обзвона","Оператор"
     ])
 
-    for obj in Actives.objects.all():
+    for obj in Suspends.objects.all():
         created_at_str = _fmt_local(obj.created_at)
         fixed_at_str   = _fmt_local(obj.fixed_at)
 
@@ -307,7 +309,8 @@ def export_all_suspends(request):
             obj.status_call,
             obj.call_result,
             obj.abonent_answer,
-            fixed_at_str
+            fixed_at_str,
+            obj.who_called,
         ])
 
     response = HttpResponse(
@@ -316,7 +319,6 @@ def export_all_suspends(request):
     response["Content-Disposition"] = 'attachment; filename="all_suspends.xlsx"'
     wb.save(response)
     return response
-
 
 def export_all_actives(request):
     wb = openpyxl.Workbook()
@@ -350,7 +352,8 @@ def export_all_actives(request):
             obj.status_call,
             obj.call_result,
             obj.abonent_answer,
-            fixed_at_str
+            fixed_at_str,
+            obj.who_called,
         ])
 
     response = HttpResponse(
@@ -360,6 +363,48 @@ def export_all_actives(request):
     wb.save(response)
     return response
 
+def export_all_fixeds(request):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Fixeds"
+
+    ws.append([
+        "DEPARTMENTS", "MSISDN", "Статус","CLIENT", "PHONE", "BRANCHES","Дата с которой Статус","[Дней в статусе]","Дата Списания АП","RATE_PLAN","Баланс","Абон плата","ACCOUNT",
+        "Статус звонка", "Результат обзвона", "Ответ абонента","Дата обзвона","Оператор"
+    ])
+
+    for obj in Fixeds.objects.all():
+        created_at_str = _fmt_local(obj.created_at)
+        fixed_at_str   = _fmt_local(obj.fixed_at)
+
+        ws.append([
+            obj.departments,
+            obj.msisdn,
+            obj.status,
+            obj.client,
+            obj.phone,
+            obj.branches,
+            obj.status_from,
+            obj.days_in_status,
+            obj.write_offs_date,
+            obj.rate_plan,
+            obj.balance,
+            obj.subscription_fee,
+            obj.account,
+            obj.status_call,
+            obj.call_result,
+            obj.abonent_answer,
+            obj.fixed_at,
+            obj.who_called,
+
+        ])
+
+    response = HttpResponse(
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    response["Content-Disposition"] = 'attachment; filename="all_actives.xlsx"'
+    wb.save(response)
+    return response
 
 def _capture_run(func):
     buffer = io.StringIO()
@@ -375,7 +420,6 @@ def _capture_run(func):
 
     log_text = buffer.getvalue()
     return log_text, result
-
 
 @staff_member_required
 def export_suspends_phones_csv(request):
@@ -404,7 +448,6 @@ def export_suspends_phones_csv(request):
 
     return resp
 
-
 class ImportUploadView(APIView):
     parser_classes = (MultiPartParser, FormParser)
     permission_classes = [IsAdminUser]
@@ -425,7 +468,6 @@ class ImportUploadView(APIView):
 
         return Response({"job_id": job.id}, status=status.HTTP_201_CREATED)
 
-
 class ImportStatusView(APIView):
     permission_classes = [IsAdminUser]
 
@@ -437,3 +479,85 @@ class ImportStatusView(APIView):
 
         data = UploadJobSerializer(job).data
         return Response(data, status=status.HTTP_200_OK)
+
+class FixedsViewSet(viewsets.ModelViewSet):
+    queryset = Fixeds.objects.all()
+    serializer_class = FixedsSerializer
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['client', 'account', 'msisdn', 'phone']
+    search_param = 'q'
+    ordering_fields = ['fixed_at','updated_at','created_at','msisdn','client','account','phone']
+    ordering = ['-fixed_at']
+
+
+class SearchSuspendsFixeds(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        try:
+            page = max(int(request.query_params.get("page") or 1), 1)
+        except Exception:
+            page = 1
+        try:
+            page_size = min(max(int(request.query_params.get("page_size") or 50), 1), 500)
+        except Exception:
+            page_size = 50
+
+        ordering = request.query_params.get("ordering") or "-created_at"
+        fld = ordering.lstrip("-")
+        if fld not in ORDERABLE:
+            ordering = "-created_at"
+            fld = "created_at"
+        reverse = ordering.startswith("-")
+
+        # --- исходные qs + фильтры ---
+        qs_s_base = _apply_filters(request, Suspends.objects.all())
+        qs_f_base = _apply_filters(request, Fixeds.objects.all())
+
+        total = qs_s_base.count() + qs_f_base.count()
+        need = page * page_size
+
+        qs_s = qs_s_base.order_by(ordering)[:need]
+        qs_f = qs_f_base.order_by(ordering)[:need]
+
+        def sort_key(o):
+            v = getattr(o, fld, None)
+            return (v is None, v)
+
+        merged = [("suspends", o) for o in qs_s] + [("fixeds", o) for o in qs_f]
+        merged.sort(key=lambda t: sort_key(t[1]), reverse=reverse)
+
+        start, end = (page - 1) * page_size, (page - 1) * page_size + page_size
+        page_slice = merged[start:end]
+
+        def norm(src, obj):
+            return {
+                "id": obj.id,
+                "msisdn": obj.msisdn,
+                "departments": obj.departments,
+                "status_from": obj.status_from,
+                "days_in_status": obj.days_in_status,
+                "write_offs_date": obj.write_offs_date,
+                "client": obj.client,
+                "rate_plan": obj.rate_plan,
+                "balance": obj.balance,
+                "subscription_fee": obj.subscription_fee,
+                "account": obj.account,
+                "branches": obj.branches,
+                "status": obj.status,
+                "phone": obj.phone,
+                "status_call": obj.status_call,
+                "call_result": obj.call_result,
+                "abonent_answer": obj.abonent_answer,
+                "note": obj.note,
+                "tech": obj.tech,
+                "called_by_id": getattr(obj, "fixed_by_id", None),
+                "called_by": obj.who_called if hasattr(obj, "who_called") else "",
+                "called_at": getattr(obj, "fixed_at", None),
+                "created_at": getattr(obj, "created_at", None),
+                "updated_at": getattr(obj, "updated_at", None),
+                "source": src,
+            }
+
+        results = [norm(src, obj) for src, obj in page_slice]
+        return Response({"count": total, "next": None, "previous": None, "results": results}, status=status.HTTP_200_OK)
