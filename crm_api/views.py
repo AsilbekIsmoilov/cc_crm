@@ -25,8 +25,8 @@ from .models import *
 from .serializers import *
 import openpyxl
 from django.http import HttpResponse
-from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
+from datetime import datetime, date, time, timedelta
 
 from .services.excel_importer import run_import
 
@@ -363,49 +363,6 @@ def export_all_actives(request):
     wb.save(response)
     return response
 
-def export_all_fixeds(request):
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Fixeds"
-
-    ws.append([
-        "DEPARTMENTS", "MSISDN", "Статус","CLIENT", "PHONE", "BRANCHES","Дата с которой Статус","[Дней в статусе]","Дата Списания АП","RATE_PLAN","Баланс","Абон плата","ACCOUNT",
-        "Статус звонка", "Результат обзвона", "Ответ абонента","Дата обзвона","Оператор"
-    ])
-
-    for obj in Fixeds.objects.all():
-        created_at_str = _fmt_local(obj.created_at)
-        fixed_at_str   = _fmt_local(obj.fixed_at)
-
-        ws.append([
-            obj.departments,
-            obj.msisdn,
-            obj.status,
-            obj.client,
-            obj.phone,
-            obj.branches,
-            obj.status_from,
-            obj.days_in_status,
-            obj.write_offs_date,
-            obj.rate_plan,
-            obj.balance,
-            obj.subscription_fee,
-            obj.account,
-            obj.status_call,
-            obj.call_result,
-            obj.abonent_answer,
-            obj.fixed_at,
-            obj.who_called,
-
-        ])
-
-    response = HttpResponse(
-        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-    response["Content-Disposition"] = 'attachment; filename="all_actives.xlsx"'
-    wb.save(response)
-    return response
-
 def _capture_run(func):
     buffer = io.StringIO()
     old_stdout, old_stderr = sys.stdout, sys.stderr
@@ -561,3 +518,118 @@ class SearchSuspendsFixeds(APIView):
 
         results = [norm(src, obj) for src, obj in page_slice]
         return Response({"count": total, "next": None, "previous": None, "results": results}, status=status.HTTP_200_OK)
+
+
+
+
+
+def _fmt(dt):
+    if not dt:
+        return ""
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+def _day_range(d: date):
+    start = datetime.combine(d, time.min)
+    end = start + timedelta(days=1)
+    return start, end
+
+def _month_range(y: int, m: int):
+    first = datetime(y, m, 1)
+    if m == 12:
+        nxt = datetime(y + 1, 1, 1)
+    else:
+        nxt = datetime(y, m + 1, 1)
+    return first, nxt
+
+def _write_fixeds_sheet(ws, qs):
+    ws.title = "Fixeds"
+    ws.append([
+        "Департамент", "MSISDN", "Статус", "Клиент", "Телефон", "Филиал",
+        "Дата с которой статус", "Дней в статусе", "Дата списания АП",
+        "Тариф", "Баланс", "Абон плата", "Лицевой счёт",
+        "Статус звонка", "Результат обзвона", "Ответ абонента",
+        "Дата обзвона", "Оператор",
+    ])
+
+    for obj in qs:
+        ws.append([
+            obj.departments,
+            obj.msisdn,
+            obj.status,
+            obj.client,
+            obj.phone,
+            obj.branches,
+            obj.status_from,
+            obj.days_in_status,
+            obj.write_offs_date,
+            obj.rate_plan,
+            obj.balance,
+            obj.subscription_fee,
+            obj.account,
+            obj.status_call,
+            obj.call_result,
+            obj.abonent_answer,
+            _fmt(obj.fixed_at),
+            obj.who_called,
+        ])
+
+def _xlsx_response(wb, filename: str):
+    resp = HttpResponse(
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    resp["Content-Disposition"] = f'attachment; filename="{filename}"'
+    wb.save(resp)
+    return resp
+
+
+
+def export_all_fixeds(request):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    _write_fixeds_sheet(ws, Fixeds.objects.all().order_by("fixed_at", "id"))
+    return _xlsx_response(wb, "fixeds_all.xlsx")
+
+
+def export_fixeds_daily(request):
+    date_str = request.GET.get("date", "")
+    if date_str:
+        try:
+            d = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return HttpResponse("Bad date format, use YYYY-MM-DD", status=400)
+    else:
+        d = date.today()
+
+    start, end = _day_range(d)
+    qs = (Fixeds.objects
+          .filter(fixed_at__gte=start, fixed_at__lt=end)
+          .exclude(fixed_at__isnull=True)
+          .order_by("fixed_at", "id"))
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    _write_fixeds_sheet(ws, qs)
+    return _xlsx_response(wb, f"fixeds_day_{d.strftime('%Y-%m-%d')}.xlsx")
+
+
+def export_fixeds_monthly(request):
+    month_str = request.GET.get("month", "")
+    if month_str:
+        try:
+            y, m = map(int, month_str.split("-"))
+        except Exception:
+            return HttpResponse("Bad month format, use YYYY-MM", status=400)
+    else:
+        today = date.today()
+        y, m = today.year, today.month
+
+    start, end = _month_range(y, m)
+    qs = (Fixeds.objects
+          .filter(fixed_at__gte=start, fixed_at__lt=end)
+          .exclude(fixed_at__isnull=True)
+          .order_by("fixed_at", "id"))
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    _write_fixeds_sheet(ws, qs)
+    return _xlsx_response(wb, f"fixeds_month_{y:04d}-{m:02d}.xlsx")
