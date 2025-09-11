@@ -22,5 +22,9 @@ urlpatterns = [
     path("export/fixeds/daily/", export_fixeds_daily, name="export_fixeds_daily"),
     path("export/fixeds/monthly/", export_fixeds_monthly, name="export_fixeds_monthly"),
     path("maintenance/move-suspends/", MoveSuspendsToFixedsAPIView.as_view(), name="maintenance-move-suspends"),
+    path("resolve-msisdn/", resolve_msisdn, name="resolve-msisdn"),
+    path("operator/statistics/", OperatorStatisticsAPIView.as_view(), name="operator_statistics"),
+    path("stats/general/", OperatorStatisticsAPIView.as_view(), name="stats_general"),
+    path("stats/daily/", OperatorDailyStatsAPIView.as_view(), name="stats_daily"),
 
 ]

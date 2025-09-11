@@ -8,7 +8,6 @@
     {{ form.as_p }}
     <div class="submit-row">
       <input type="submit" class="default" value="{% trans 'Generate & Download CSV' %}">
-      <!-- Динамическая ссылка назад в changelist текущей модели -->
       <a class="button" href="{% url opts|admin_urlname:'changelist' %}">{% trans 'Back' %}</a>
     </div>
   </form>

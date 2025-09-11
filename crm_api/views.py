@@ -20,6 +20,7 @@ from rest_framework_simplejwt.tokens import RefreshToken, UntypedToken
 from rest_framework_simplejwt.views import TokenVerifyView
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.backends import TokenBackend
+from django.db.models.functions import TruncDate
 from .services import *
 from .models import *
 from .serializers import *
@@ -27,6 +28,8 @@ import openpyxl
 from django.http import HttpResponse
 from django_filters.rest_framework import DjangoFilterBackend
 from datetime import datetime, date, time, timedelta
+from rest_framework.decorators import api_view
+from django.db.models import Count
 
 from .services.excel_importer import run_import
 
@@ -650,3 +653,80 @@ class MoveSuspendsToFixedsAPIView(APIView):
             payload["moved"] = result
 
         return Response(payload, status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+def resolve_msisdn(request):
+    """
+    Принимает список номеров, возвращает соответствующие MSISDN.
+    """
+    numbers = request.data.get("numbers", [])
+    result = []
+    for num in numbers:
+        # ищем запись в Suspends по номеру (phone)
+        rec = Suspends.objects.filter(phone=num).first()
+        if rec and rec.msisdn:
+            result.append({"number": num, "msisdn": rec.msisdn})
+        else:
+            result.append({"number": num, "msisdn": None})
+    return Response(result)
+
+
+class OperatorStatisticsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        now = timezone.now()
+
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = today_start - timedelta(days=today_start.weekday())  # понедельник
+        month_start = today_start.replace(day=1)
+
+        qs = Fixeds.objects.filter(fixed_by=user)
+
+        stats = {
+            "today": qs.filter(fixed_at__gte=today_start).count(),
+            "week": qs.filter(fixed_at__gte=week_start).count(),
+            "month": qs.filter(fixed_at__gte=month_start).count(),
+            "total": qs.count(),
+        }
+
+        status_stats = (
+            qs.values("status_call")
+              .annotate(count=Count("id"))
+              .order_by()
+        )
+
+        status_dict = {row["status_call"] or "не указано": row["count"] for row in status_stats}
+
+        return Response({
+            "general": stats,
+            "by_status_call": status_dict
+        }, status=status.HTTP_200_OK)
+
+
+
+class OperatorDailyStatsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        now = timezone.now()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        qs = (
+            Fixeds.objects
+            .filter(fixed_by=user, fixed_at__gte=month_start)
+            .annotate(day=TruncDate("fixed_at"))
+            .values("day")
+            .annotate(count=Count("id"))
+            .order_by("day")
+        )
+
+        data = [
+            {"date": row["day"].strftime("%Y-%m-%d"), "count": row["count"]}
+            for row in qs
+        ]
+
+        return Response(data, status=status.HTTP_200_OK)

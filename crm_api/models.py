@@ -76,6 +76,7 @@ class Actives(models.Model):
     branches = models.CharField(max_length=300, null=True, blank=True)
     status = models.CharField(max_length=150, null=True, blank=True)
     phone = models.CharField(max_length=15, null=True, blank=True)
+    address = models.TextField(null=True,blank=True)
 
     status_call = models.CharField(max_length=20, choices=STATUS_CALL_CHOICES, null=True, blank=True)
     call_result = models.CharField(max_length=32, choices=CALL_RESULT_CHOICES, null=True, blank=True)
@@ -148,6 +149,7 @@ class Fixeds(models.Model):
     branches = models.CharField(max_length=300, null=True, blank=True)
     status = models.CharField(max_length=150, null=True, blank=True)
     phone = models.CharField(max_length=15, null=True, blank=True)
+    address = models.TextField(null=True,blank=True)
 
     status_call = models.CharField(max_length=20, choices=STATUS_CALL_CHOICES, null=True, blank=True)
     call_result = models.CharField(max_length=32, choices=CALL_RESULT_CHOICES, null=True, blank=True)
@@ -190,6 +192,12 @@ class Fixeds(models.Model):
 
     def __str__(self):
         return f"{self.msisdn or '-'} — {self.client or '-'} (fixed)"
+
+    @property
+    def who_called(self) -> str:
+        if not self.fixed_by:
+            return ""
+        return (getattr(self.fixed_by, "fio", None) or self.fixed_by.get_full_name() or self.fixed_by.username)
 
 
 def move_suspends_with_status_call_to_fixeds(
@@ -245,14 +253,6 @@ def move_suspends_with_status_call_to_fixeds(
 
     return moved
 
-    @property
-    def who_called(self) -> str:
-        if not self.fixed_by:
-            return ""
-        return (getattr(self.fixed_by, "fio", None) or self.fixed_by.get_full_name() or self.fixed_by.username)
-
-
-
 
 class ExcelUpload(models.Model):
     file = models.FileField(upload_to="uploads/%Y/%m/%d")
@@ -279,7 +279,7 @@ class UploadJob(models.Model):
     failed_rows = models.IntegerField(default=0)
 
     last_error = models.TextField(blank=True, default="")
-    target_table = models.CharField(max_length=128, default="actives")  # по умолчанию
+    target_table = models.CharField(max_length=128, default="actives")
 
     def __str__(self):
         return f"UploadJob#{self.id} {self.status}"

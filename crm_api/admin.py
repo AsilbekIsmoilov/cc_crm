@@ -28,7 +28,7 @@ BASE_LIST_DISPLAY = (
 
 BASE_FIELDSETS = (
     ("Идентификация", {
-        "fields": ("msisdn", "phone", "client", "account"),
+        "fields": ("msisdn", "phone", "client", "account","address"),
     }),
     ("Организационное", {
         "fields": ("departments", "branches"),
@@ -69,11 +69,9 @@ class ActivesAdmin(admin.ModelAdmin):
     save_on_top = True
     empty_value_display = "—"
 
-
 @admin.register(Suspends)
 class SuspendsAdmin(ActivesAdmin):
     pass
-
 
 class BulkOperatorsForm(forms.Form):
     count = forms.IntegerField(min_value=1, max_value=5000, initial=50, label="Сколько создать")
@@ -81,9 +79,7 @@ class BulkOperatorsForm(forms.Form):
     start = forms.IntegerField(min_value=0, initial=0, label="Начать с индекса")
     reset_existing = forms.BooleanField(required=False, initial=False, label="Сбросить пароли существующим")
 
-
 User = get_user_model()
-
 
 @admin.register(User)
 class UserAdmin(DjangoUserAdmin):
@@ -130,7 +126,6 @@ class UserAdmin(DjangoUserAdmin):
         return render(request, "admin/crm_api/user/bulk_create_operators.html", context)
 
 admin.site.register(ExcelUpload)
-
 
 @admin.register(UploadJob)
 class UploadJobAdmin(admin.ModelAdmin):
